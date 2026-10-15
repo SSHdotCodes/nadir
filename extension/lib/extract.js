@@ -611,6 +611,21 @@
     let txLsum = 0, txW = 0;
     for (const t of tokens.values()) if (t.role === R.text && t.chars) { txLsum += oklab(t.c)[0] * t.chars; txW += t.chars; }
     const darkness = {bgL: bgW ? bgLsum / bgW : 1, darkFrac: bgW ? darkW / bgW : 0, textL: txW ? txLsum / txW : 0, rootL: oklab(rootSurface)[0]};
+    // the same measure when <html>/<body> paint the canvas with a gradient instead of a colour (many dark sites):
+    // only for recognising an already-dark page, never a model input
+    const rootGrad = [rootCS.backgroundImage, bodyCS && bodyCS.backgroundImage]
+      .map((v) => (v && v.includes('gradient') && !v.includes('url(') ? colorsIn(v) : [])).find((cs) => cs.length);
+    if (rootGrad) {
+      const g = [0, 0, 0, 1];
+      for (const c of rootGrad) { const o = over(c, rootSurface); for (let k = 0; k < 3; k++) g[k] += o[k] / rootGrad.length; }
+      let gs = 0, gw = 0, gd = 0;
+      for (const [t, own] of ownAreaTok) {
+        if (t.role !== R.bg) continue;
+        const L = oklab(t.root ? g : over(t.c, t.under[3] ? labToApproxRgb(t.under) : g))[0];
+        gs += L * own; gw += own; if (L < 0.45) gd += own;
+      }
+      darkness.g = {bgL: gw ? gs / gw : 1, darkFrac: gw ? gd / gw : 0};
+    }
 
     // ---------- token selection & features ----------
     let list = [...tokens.values()];

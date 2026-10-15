@@ -191,6 +191,27 @@
       outputs[i].rgb = outputs[i].rgb.map((c, k) => Math.round(c * a + under[k] * (1 - a)));
       outputs[i].a = 1; outputs[i].L = oklab(...outputs[i].rgb)[0];
     });
+    // a large light gradient (a hero wash) stays light only over media: elsewhere the teacher darkens 94-98% of the
+    // light stops covering a tenth of the screen or more. Now and then the model keeps one light, and the wash
+    // becomes a glare under light text: it takes the dark design of the nearest light surface colour (or the canvas)
+    const bgDark = [];
+    toks.forEach((t, j) => { if (t.role === 0 && !keep.has(j) && t.rgba[3] >= 0.999 && outputs[j].a >= 0.999 && outputs[j].L < 0.45) bgDark.push(j); });
+    toks.forEach((t, i) => {
+      if (t.role !== 4 || keep.has(i) || t.rgba[3] < 0.999 || outputs[i].L <= 0.7 || t.f[12] < 0.3 || t.f[48] >= 0.5) return;
+      const q = oklab(t.rgba[0], t.rgba[1], t.rgba[2]);
+      if (q[0] <= 0.85) return;
+      let best = -1, bd = Infinity;
+      for (const j of bgDark) {
+        const o = oklab(toks[j].rgba[0], toks[j].rgba[1], toks[j].rgba[2]);
+        const d = 1.5 * (o[0] - q[0]) ** 2 + (o[1] - q[1]) ** 2 + (o[2] - q[2]) ** 2;
+        if (d < bd) { bd = d; best = j; }
+      }
+      if (best < 0) best = canvasI;
+      if (best < 0) return;
+      const bi = oklab(toks[best].rgba[0], toks[best].rgba[1], toks[best].rgba[2]), bo = oklab(...outputs[best].rgb);
+      const L = Math.max(0.05, Math.min(0.45, q[0] + bo[0] - bi[0]));
+      outputs[i].rgb = labToRgb(L, q[1] + bo[1] - bi[1], q[2] + bo[2] - bi[2]); outputs[i].L = L; outputs[i].a = 1;
+    });
     // things that were invisible against their surface stay invisible: gradient stops with exactly a surface's
     // colour (text fades) take that surface's dark colour, and so do borders that matched their surface
     const keyOf = (t) => t.rgba[0] * 65536 + t.rgba[1] * 256 + t.rgba[2];

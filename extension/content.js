@@ -15,9 +15,11 @@
   if (document.contentType && !/html|xml/.test(document.contentType)) return;
 
   const THEME = {mode: 1, brightness: 100, contrast: 100, sepia: 0, grayscale: 0};
-  const MODEL_VERSION = 6;
+  const MODEL_VERSION = 7;
   const SITE_KEY = 'site:' + HOST;
-  const DARK_THRESHOLD = (d) => d.bgL < 0.45 && d.darkFrac > 0.6 && (d.textL === 0 || d.textL > 0.55);
+  const DARK_THRESHOLD = (d) => (d.bgL < 0.45 && d.darkFrac > 0.6 && (d.textL === 0 || d.textL > 0.55)) ||
+    // a page painted dark by a gradient on <html>/<body>, with no background colour of its own
+    !!(d.g && d.g.bgL < 0.45 && d.g.darkFrac > 0.6 && (d.textL === 0 || d.textL > 0.55));
   let settings = null, site = null, map = null, drOn = false, treat = {}, svgTreat = {};
   const t0 = performance.now();
   const timing = {};
@@ -141,19 +143,119 @@
     return __nadirOklab(rgb);
   };
   const REMOVE_MIN = 0.7;
-  function decide(r, kind) {
+  // im: the element's record (image features f, place on the page), when known
+  function decide(r, kind, im) {
     if (!r) return 'keep';
     if ((r.role === 'photo' || r.role === 'avatar') && r.rp >= 0.5) return r.role === 'photo' ? 'photo' : 'keep'; // 'photo' = keep (dimmable on request)
     const p = r.probs || [1, 0, 0, 0];
+    const f = im && im.f && im.f[26] ? im.f : null; // with pixel stats
     let t = r.t;
+    // drawn over a picture that is shown as it is (a title over a hero illustration, a logo on a photo): its real
+    // surface does not change, so neither does the element
+    if (t !== 'keep' && onShownImage(im)) return 'keep';
     // a surface that is light in the original and stays light in the dark design: the element is shown as designed.
     // Flipped (its dark ink made light) or removed, it would vanish against that surface
     if (t !== 'keep' && r.ulL >= 0.75 && r.udL >= 0.75) return 'keep';
     // only CSS backgrounds can go, and only when the head is sure: taking an image away is the costly mistake. On
     // held-out sites, removing at >= 70% confidence (else the best other option) cut wrong removals by 57%
     if (t === 'remove' && (kind !== 'bg' || p[3] < REMOVE_MIN)) t = p[2] > Math.max(p[0], p[1]) ? 'adapt' : (p[1] > p[0] ? 'invert' : 'keep');
+    // light graphics on transparency over a surface that is dark in the original and stays dark were drawn for that
+    // surface: flipped, they vanish into it. Held-out elements: keep acceptable 24 of 30 times, the flip 15
+    // An all-white opaque icon there is the same (adapting would take it for a white backing and remove it).
+    if ((t === 'invert' || t === 'adapt') && f && r.ulL < 0.5 && r.udL < 0.5 &&
+        ((f[29] >= 0.5 && f[34] < 0.5) || (f[29] >= 0.9 && f[33] < 0.02))) return 'keep';
+    // dark ink on transparency (a wordmark, a tagline) kept on a light surface that turns dark would vanish: the
+    // logo is adapted instead (neutral dark ink turns light, brand colours stay); an image without such ink is left
+    // as it is by the adaptation itself. Only when the head gives adapting a real chance, and not for a dark badge
+    // with white text in it (a black oval logo): that already reads on a dark page, flipped it becomes a light blob
+    if (t === 'keep' && f && (kind === 'img' || kind === 'bg') && (r.role === 'logo' || r.role === 'text') && p[2] >= 0.15 &&
+        r.ulL >= 0.5 && r.udL < 0.4 && f[33] >= 0.1 && f[32] < 0.03 && f[27] >= 0.2 && f[34] < 0.5) return 'adapt:keep';
+    // a large light picture (a pale hero wash, light beams, a decorative supergraphic) kept as it is under text the
+    // dark palette turns light leaves that text unreadable: it goes dark with the page instead. A CSS background is
+    // removed when the head gives that a real chance, anything else gets the hue-preserving inversion
+    if (t === 'keep' && f && (r.role === 'illustration' || r.role === 'backdrop') && f[29] >= 0.7 && f[27] <= 0.3 && f[3] >= 0.08 && darkTextOver(im, kind)) {
+      return kind === 'bg' && p[3] >= 0.2 ? 'remove' : 'invert';
+    }
     if (t === 'adapt') return 'adapt:' + (p[1] > p[0] ? 'invert' : 'keep'); // the fallback when there is nothing to adapt
     return t;
+  }
+  // does dark text of the light design sit on this picture? (its element is found from its record; at most a few
+  // large light pictures per page are asked)
+  const textOverMemo = new Map();
+  function darkTextOver(im, kind) {
+    const key = kind + '|' + im.src + '|' + im.x + ',' + im.y;
+    if (textOverMemo.has(key)) return textOverMemo.get(key);
+    let res = false;
+    try { res = drOn ? withLightStyles(() => findDarkTextOver(im, kind)) : findDarkTextOver(im, kind); } catch (e) { res = false; }
+    textOverMemo.set(key, res);
+    return res;
+  }
+  function findDarkTextOver(im, kind) {
+    const x0 = im.x - scrollX, y0 = im.y - scrollY, x1 = x0 + im.w, y1 = y0 + im.h;
+    const near = (b) => Math.abs(b.left - x0) < 4 && Math.abs(b.top - y0) < 4 && Math.abs(b.width - im.w) < 4;
+    let el = null;
+    if (kind === 'img') el = [...document.images].find((i) => (i.currentSrc || i.src) === im.src && near(i.getBoundingClientRect()));
+    else {
+      const cx = Math.min(innerWidth - 1, Math.max(0, x0 + im.w / 2)), cy = Math.min(innerHeight - 1, Math.max(0, y0 + Math.min(im.h / 2, 200)));
+      const want = im.src.slice(0, 300);
+      el = document.elementsFromPoint(cx, cy).find((e) => getComputedStyle(e).backgroundImage.includes(want));
+    }
+    if (!el) return false;
+    // the text of the block the picture belongs to (a picture behind a hero's text is usually its sibling)
+    let box = kind === 'img' ? el.parentElement : el;
+    for (let i = 0; i < 4 && box && box.parentElement; i++) {
+      const b = box.getBoundingClientRect();
+      if (b.width >= im.w * 0.9 && b.height >= im.h * 0.9) break;
+      box = box.parentElement;
+    }
+    if (!box) return false;
+    const tw = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+    let chars = 0, n = 0;
+    for (let node = tw.nextNode(); node && n < 600; node = tw.nextNode(), n++) {
+      const s = node.textContent.trim();
+      if (s.length < 3 || !node.parentElement) continue;
+      const b = node.parentElement.getBoundingClientRect();
+      if (!b.width || !b.height) continue;
+      const ix = Math.min(b.right, x1) - Math.max(b.left, x0), iy = Math.min(b.bottom, y1) - Math.max(b.top, y0);
+      if (ix <= 0 || iy <= 0 || ix * iy < 0.5 * b.width * b.height) continue;
+      const cs = getComputedStyle(node.parentElement);
+      if (cs.visibility === 'hidden' || +cs.opacity < 0.2) continue;
+      // text on its own surface (a pill, a card, a button) is not on the picture
+      let own = false;
+      for (let e = node.parentElement; e && e !== box && e !== el; e = e.parentElement) {
+        const ec = getComputedStyle(e), bc = __nadirParseColor(ec.backgroundColor);
+        if ((bc && bc[3] >= 0.5) || (ec.backgroundImage && ec.backgroundImage !== 'none')) { own = true; break; }
+      }
+      if (own) continue;
+      const c = __nadirParseColor(cs.color); // lab(), oklch() and friends too
+      if (c && c[3] > 0.5 && NadirMap.oklab(c[0], c[1], c[2])[0] < 0.5) chars += s.length;
+      if (chars >= 15) return true;
+    }
+    return false;
+  }
+  // <img>s shown exactly as they are (opaque pictures), with their place on the page: an element drawn over one of
+  // them sits on that picture, not on the page surface the analysis found beneath it
+  const shownImgs = [];
+  function noteShown(im, t) {
+    if (!im || im.kind !== 'img' || !(im.w * im.h >= 4000) || (t !== 'keep' && t !== 'photo') || !im.f || !im.f[26] || im.f[27] > 0.05) return;
+    if (shownImgs.length < 400) shownImgs.push({im, x: im.x, y: im.y, w: im.w, h: im.h});
+  }
+  const imgEl = (rec) => [...document.images].find((i) => (i.currentSrc || i.src) === rec.src &&
+    Math.abs(i.getBoundingClientRect().left + scrollX - rec.x) < 4 && Math.abs(i.getBoundingClientRect().top + scrollY - rec.y) < 4);
+  function onShownImage(im) {
+    if (!im || im.kind !== 'img' || !(im.w > 0) || !shownImgs.length) return false;
+    const cx = im.x + im.w / 2, cy = im.y + im.h / 2, a = im.w * im.h;
+    const s = shownImgs.find((s) => s.im !== im && s.w * s.h >= 4 * a && cx > s.x && cx < s.x + s.w && cy > s.y && cy < s.y + s.h);
+    if (!s) return false;
+    // ...and on nothing opaque of its own in between: a logo inside a popup or a card over the picture sits on that
+    // popup's surface. Its containers up to the one it shares with the picture must all be see-through
+    const A = imgEl(im), B = imgEl(s.im);
+    if (!A || !B) return false;
+    for (let e = A.parentElement; e && !e.contains(B); e = e.parentElement) {
+      const cs = getComputedStyle(e), c = __nadirParseColor(cs.backgroundColor);
+      if ((c && c[3] >= 0.5) || (cs.backgroundImage && cs.backgroundImage !== 'none')) return false;
+    }
+    return true;
   }
   const cropKey = (src, crop) => src + (crop ? '#nadir-crop=' + crop.join(',') : '');
   const strip = (rec) => { const o = Object.assign({}, rec); delete o.dims; delete o.key; return o; };
@@ -164,6 +266,7 @@
     recs.forEach((rec, i) => {
       const r = Array.isArray(res) ? res[i] : null;
       if (!r || !r.thumb || !r.f) return;
+      rec.f = r.f;
       items.push({f: r.f, thumb: r.thumb, ul: rec.under, ud: darkLab(rec.surf)});
       idx.push(i);
     });
@@ -199,7 +302,7 @@
     const batch = withLightStyles(() => items.map(([img, src]) => Object.assign(__nadirImageRecord(img, 'img', src), {key: src})));
     const dec = await classifyRecords(batch);
     const found = {};
-    batch.forEach((rec, i) => { found[rec.key] = treat[rec.key] = decide(dec[i], 'img'); });
+    batch.forEach((rec, i) => { const t = decide(dec[i], 'img', rec); found[rec.key] = treat[rec.key] = t; noteShown(rec, t); });
     applyImages();
     remember(found);
     lateTimer = lateQueue.length ? setTimeout(flushLate, 50) : 0;
@@ -227,9 +330,22 @@
     return pr;
   }
   function bgRecord({d, src}) {
-    let el = null;
-    try { const sel = (d.selector || '').replace(/::?(before|after)/g, ''); el = sel ? document.querySelector(sel) : null; } catch (e) { el = null; }
-    if (el) { const r = el.getBoundingClientRect(); return __nadirImageRecord(el, 'bg', src, __nadirBgCrop(getComputedStyle(el), r.width, r.height)); }
+    let el = null, ps = null;
+    try {
+      const m = /::?(before|after)/.exec(d.selector || ''); ps = m ? '::' + m[1] : null;
+      const sel = (d.selector || '').replace(/::?(before|after)/g, ''); el = sel ? document.querySelector(sel) : null;
+    } catch (e) { el = null; }
+    if (el) {
+      const r = el.getBoundingClientRect();
+      let cs = getComputedStyle(el), box = null;
+      if (ps) {
+        // a ::before/::after background is drawn in the pseudo-element's own box (a 32-px checkmark), not in its
+        // host's (the whole list item): measured as the host, an icon reads as a large backdrop
+        const pcs = getComputedStyle(el, ps), w = parseFloat(pcs.width), h = parseFloat(pcs.height);
+        if (w > 0 && h > 0 && (w < r.width - 1 || h < r.height - 1)) { cs = pcs; box = {left: r.left, top: r.top, width: w, height: h}; }
+      }
+      return __nadirImageRecord(el, 'bg', src, __nadirBgCrop(cs, box ? box.width : r.width, box ? box.height : r.height), box);
+    }
     return Object.assign(__nadirImageRecord(document.body || document.documentElement, 'bg', src), {w: d.width || 24, h: d.height || 24, areaSum: (d.width || 24) * (d.height || 24), x: 0, y: 0, vx: 0, vy: 0});
   }
   async function flushBg() {
@@ -239,7 +355,7 @@
     withLightStyles(() => batch.forEach((b) => { b.rec = bgRecord(b); }));
     const dec = await Promise.race([classifyRecords(batch.map((b) => b.rec)), sleep(4000).then(() => batch.map(() => null))]);
     const found = {};
-    batch.forEach((b, i) => { const t = dec[i] ? decide(dec[i], 'bg') : undefined; if (t) found[b.src] = treat[b.src] = t; b.resolve(t); });
+    batch.forEach((b, i) => { const t = dec[i] ? decide(dec[i], 'bg', b.rec) : undefined; if (t) found[b.src] = treat[b.src] = t; b.resolve(t); });
     remember(found);
   }
   // what the engine should do with a background image
@@ -340,11 +456,40 @@
     return !m || __nadirOklab([+m[1], +m[2], +m[3]])[0] < 0.5;
   }
 
+  // The palette is predicted colour by colour, and now and then one stop of a light gradient stays light while the
+  // others go dark: a pale hero wash becomes a glaring sweep under light text. The stops of one light gradient go
+  // dark together; a stray light one takes the darkest stop's colour, as much darker as it was lighter, in its own hue.
+  // stops: {r,g,b,a} | null per stop; cols: the modified colour strings (changed in place)
+  const cssRgb = (c) => {
+    let m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(c);
+    if (m) return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+    m = /rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)/.exec(c);
+    return m ? [+m[1], +m[2], +m[3]] : null;
+  };
+  function gradientFix(stops, cols) {
+    const info = stops.map((c, k) => {
+      if (!c || (c.a != null && c.a < 0.999) || typeof cols[k] !== 'string' || /rgba\([^)]*,\s*0?\.\d+\)/.test(cols[k])) return null;
+      const out = cssRgb(cols[k]);
+      return out ? {k, lin: NadirMap.oklab(c.r, c.g, c.b), Lout: NadirMap.oklab(out[0], out[1], out[2])[0], out} : null;
+    }).filter((x) => x && x.lin[0] > 0.8);
+    if (info.length < 2) return;
+    const dark = info.filter((x) => x.Lout < 0.45);
+    if (!dark.length || dark.length === info.length) return;
+    const ref = dark.reduce((m, x) => (x.Lout < m.Lout ? x : m));
+    for (const x of info) {
+      if (x.Lout < 0.6) continue;
+      const L = Math.max(0.08, Math.min(0.42, ref.Lout + (ref.lin[0] - x.lin[0]) * 0.6));
+      const rgb = NadirMap.toRgb(L, x.lin[1] * 0.6, x.lin[2] * 0.6);
+      cols[x.k] = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+    }
+  }
+
   // ---------------- applying a learned mapping ----------------
   function applyMapping(entry) {
     map = new NadirMap(entry.tokens, entry.colors, {keep: new Set(entry.keep || [])});
     window.__nadirColorHook = (role, r, g, b, a) => map.lookup(role, r, g, b, a);
     window.__nadirFillSide = (r, g, b, a) => map.fillSide(r, g, b, a);
+    window.__nadirGradientFix = gradientFix;
     treat = entry.treat || {}; svgTreat = entry.svg || {}; ctxVec = entry.ctx || null;
     window.__nadirBgImageHook = (src, d) => {
       const t = bgDecision(src);
@@ -431,7 +576,7 @@
     const found = {};
     recs.forEach((rec, i) => {
       const key = cropKey(rec.src, rec.cropPx);
-      const t = decide(dec[i], 'pseudo');
+      const t = decide(dec[i], 'pseudo', rec);
       contentStats.set(key, t); found[key] = t;
     });
     remember(found);
@@ -606,11 +751,14 @@
     if (!res || res.error) throw new Error('inference failed: ' + (res && res.error));
     const entry = {mode: 'model', v: MODEL_VERSION, t: Date.now(), tokens: page.tokens.slice(0, 256).map((t) => ({role: t.role, rgba: t.rgba})),
       colors: res.colors, keep: res.keep, treat: {}, svg: {}, ctx: res.ctx, ms: res.ms, elemMs: res.elemMs};
-    // the element head's decision for every measured image; the rest is measured and decided when the page shows it
+    // the element head's decision for every measured image; the rest is measured and decided when the page shows it.
+    // Pictures shown as they are go first: what is drawn over them is decided knowing that
+    const els = res.elements || [];
+    page.images.forEach((im, j) => { if (els[j] && im.kind === 'img') noteShown(im, decide(els[j], im.kind, im)); });
     page.images.forEach((im, j) => {
-      const r = res.elements && res.elements[j];
+      const r = els[j];
       if (!r) return;
-      const t = decide(r, im.kind);
+      const t = decide(r, im.kind, im);
       if (im.kind === 'svg') {
         if (im.useExt) { const el = document.querySelector(`[data-nadir-svg="${im.src}"]`); const sig = el && svgSig(el); if (sig) entry.svg[sig] = t.startsWith('adapt') ? 'invert' : t; }
         return;

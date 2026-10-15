@@ -137,21 +137,25 @@
     for (let x = 0; x < w; x++) { ringPx(x); ringPx((h - 1) * w + x); }
     for (let y = 1; y < h - 1; y++) { ringPx(y * w); ringPx(y * w + w - 1); }
     info.ring = n ? light / n : 0;
-    let bg = null;
+    let bg = null, keepPale = false;
     if (n && light / n >= 0.5) bg = oklab(sr / light, sg / light, sb / light);
     else if (n > 0.2 * ringN) { info.why = 'ring'; return false; } // no light background to remove (tight crops touch the edge)
     else {
       // on transparency: only worth it when neutral dark ink (wordmark text) would vanish on a dark surface
-      let opq = 0, ink = 0;
+      let opq = 0, ink = 0, pale = 0;
       for (let p = 0, P = w * h; p < P; p++) {
         const i = p * 4;
         if (d[i + 3] < 128) continue;
         opq++;
         const o = oklab(d[i], d[i + 1], d[i + 2]);
         if (o[0] < 0.5 && Math.hypot(o[1], o[2]) < 0.05) ink++;
+        else if (o[0] > 0.6 && Math.hypot(o[1], o[2]) < 0.05) pale++;
       }
       info.ink = opq ? ink / opq : 0;
       if (!opq || ink / opq < 0.08) { info.why = 'no-ink'; return false; }
+      // thin white outlines, highlights and knockouts next to a little dark ink already read on a dark surface and
+      // stay; white text on a dark box, or dark text on a white label, flips together with its ink
+      keepPale = pale / opq < 0.25 && ink / opq < 0.3;
     }
     const cache = new Map();
     for (let p = 0, P = w * h; p < P; p++) {
@@ -169,7 +173,7 @@
           let L = bg ? (o[0] - (1 - cov) * bg[0]) / cov : o[0], a = bg ? (o[1] - (1 - cov) * bg[1]) / cov : o[1], b = bg ? (o[2] - (1 - cov) * bg[2]) / cov : o[2];
           L = Math.max(0, Math.min(1, L));
           const C = Math.hypot(a, b);
-          if (C < 0.05) L = 0.94 - 0.75 * L;                       // black/gray ink -> light
+          if (C < 0.05) { if (!(keepPale && L > 0.6)) L = 0.94 - 0.75 * L; } // black/gray ink -> light
           else if (L < 0.62) { L = 0.62 + 0.15 * L / 0.62; a *= 0.92; b *= 0.92; } // brand colour: same hue, lifted to read on dark
           const rgb = toRgb(L, a, b);
           r = [rgb[0], rgb[1], rgb[2], cov];
@@ -215,6 +219,8 @@
     return c.toDataURL('image/png');
   }
 
+  NadirMap.oklab = oklab;
+  NadirMap.toRgb = toRgb;
   globalThis.NadirMap = NadirMap;
   globalThis.NadirAdaptImage = adaptImage;
   globalThis.NadirImageCSS = TREAT_CSS;

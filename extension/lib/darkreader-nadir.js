@@ -3859,30 +3859,38 @@
                     /([^\(\),]+(\([^\(\)]*(\([^\(\)]*\)*[^\(\)]*)?\))?([^\(\), ]|( (?!calc)))*),?/g;
                 const colorStopRegex =
                     /^(from|color-stop|to)\(([^\(\)]*?,\s*)?(.*?)\)$/;
+                // Nadir: every stop is [its colour or null, format(modified colour)], so the stops of one gradient
+                // can be checked together (__nadirGradientFix) before the value is written
                 const parts = getMatches(partsRegex, match, 1).map((part) => {
                     part = part.trim();
                     let rgb = parseColorWithCache(part);
                     if (rgb) {
-                        return (theme) => modifyGradientColor(rgb, theme);
+                        return [rgb, (c) => c];
                     }
                     const space = part.lastIndexOf(" ");
                     rgb = parseColorWithCache(part.substring(0, space));
                     if (rgb) {
-                        return (theme) =>
-                            `${modifyGradientColor(rgb, theme)} ${part.substring(space + 1)}`;
+                        return [rgb, (c) => `${c} ${part.substring(space + 1)}`];
                     }
                     const colorStopMatch = part.match(colorStopRegex);
                     if (colorStopMatch) {
                         rgb = parseColorWithCache(colorStopMatch[3]);
                         if (rgb) {
-                            return (theme) =>
-                                `${colorStopMatch[1]}(${colorStopMatch[2] ? `${colorStopMatch[2]}, ` : ""}${modifyGradientColor(rgb, theme)})`;
+                            return [rgb, (c) =>
+                                `${colorStopMatch[1]}(${colorStopMatch[2] ? `${colorStopMatch[2]}, ` : ""}${c})`];
                         }
                     }
-                    return () => part;
+                    return [null, () => part];
                 });
                 return (theme) => {
-                    return `${typeGradient}(${parts.map((modify) => modify(theme)).join(", ")})${hasComma ? ", " : ""}`;
+                    const cols = parts.map(([rgb]) => (rgb ? modifyGradientColor(rgb, theme) : null));
+                    const fix = theme.mode === 1 && globalThis.__nadirGradientFix;
+                    if (fix) {
+                        try {
+                            fix(parts.map(([rgb]) => rgb), cols);
+                        } catch (err) {}
+                    }
+                    return `${typeGradient}(${parts.map(([, fmt], k) => fmt(cols[k])).join(", ")})${hasComma ? ", " : ""}`;
                 };
             };
             const getURLModifier = (urlValue) => {

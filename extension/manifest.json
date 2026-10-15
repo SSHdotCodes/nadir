@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Nadir — AI Dark Mode",
   "short_name": "Nadir",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Tasteful dark mode for every website. Keeps sites that are already dark, turns on a site's own dark theme when it has one, and otherwise a small on-device AI model designs one.",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "unlimitedStorage", "offscreen", "scripting", "tabs", "declarativeNetRequestWithHostAccess"],
