@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg: #121316; --card: #1a1c21; --line: #2a2d34; --text: #e6e8ec; --muted: #9aa1ad; --accent: #8b97ff; --ok: #4cc38a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 300px; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+  header img { width: 26px; height: 26px; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .host { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { margin: 0 16px 12px; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  .status b { display: block; font-size: 13px; }
+  .status span { color: var(--muted); font-size: 12px; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 9px 16px; border-top: 1px solid var(--line); }
+  .row label { cursor: pointer; }
+  .row small { display: block; color: var(--muted); font-size: 11.5px; }
+  .sw { position: relative; width: 34px; height: 20px; flex: none; }
+  .sw input { opacity: 0; width: 0; height: 0; }
+  .sw i { position: absolute; inset: 0; background: #3a3e47; border-radius: 20px; transition: .15s; cursor: pointer; }
+  .sw i::after { content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: .15s; }
+  .sw input:checked + i { background: var(--accent); }
+  .sw input:checked + i::after { transform: translateX(14px); }
+  button { margin: 10px 16px 14px; width: calc(100% - 32px); padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<header><img src="icons/48.png" alt=""><div><h1>Nadir</h1><div class="host" id="host"></div></div></header>
+<div class="status"><b id="st">Checking…</b><span id="sub"></span></div>
+<div class="row"><label for="site"><span>Dark mode on this site</span></label><span class="sw"><input type="checkbox" id="site"><i></i></span></div>
+<div class="row"><label for="force"><span>Prefer Nadir's design</span><small>Even when the site has its own dark theme</small></label><span class="sw"><input type="checkbox" id="force"><i></i></span></div>
+<div class="row"><label for="dim"><span>Dim large photos slightly</span></label><span class="sw"><input type="checkbox" id="dim"><i></i></span></div>
+<div class="row"><label for="curtain"><span>Hide new sites until ready</span><small>Avoids a flash of the light page</small></label><span class="sw"><input type="checkbox" id="curtain"><i></i></span></div>
+<div class="row"><label for="all"><span>Nadir everywhere</span></label><span class="sw"><input type="checkbox" id="all"><i></i></span></div>
+<button id="re">Re-analyze this site</button>
+<script src="popup.js"></script>
+</body>
+</html>

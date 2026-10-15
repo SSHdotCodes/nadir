@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Nadir — AI Dark Mode",
+  "short_name": "Nadir",
+  "version": "2.0.0",
+  "description": "Tasteful dark mode for every website. Keeps sites that are already dark, turns on a site's own dark theme when it has one, and otherwise a small on-device AI model designs one.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "unlimitedStorage", "offscreen", "scripting", "tabs", "declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["<all_urls>"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["lib/darkreader-nadir.js", "lib/extract.js", "lib/nadir-map.js", "content.js"],
+    "run_at": "document_start",
+    "all_frames": true
+  }],
+  "action": {"default_popup": "popup.html", "default_title": "Nadir", "default_icon": {"16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png"}},
+  "icons": {"16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png"},
+  "content_security_policy": {"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"},
+  "cross_origin_embedder_policy": {"value": "require-corp"},
+  "cross_origin_opener_policy": {"value": "same-origin"}
+}
